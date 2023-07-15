@@ -9,7 +9,9 @@
 #include <utility>
 #include <vector>
 
+extern "C" {
 #include <chfs.h>
+}
 #include "absl/functional/function_ref.h"
 #include "absl/status/status.h"
 #include "absl/strings/cord.h"
