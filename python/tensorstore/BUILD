@@ -59,6 +59,10 @@ pybind11_py_extension(
         "//tensorstore/kvstore/ocdbt/python",
         "@com_github_pybind_pybind11//:pybind11",
     ],
+    linkopts = [
+        "-L/work/0/NBB/skoyama/spack/var/spack/environments/chfs/.spack-env/view/lib -lchfs -lmargo -lpthread -lmercury -labt -ljson-c -lfuse -pthread",
+        "-Wl,-rpath /work/0/NBB/skoyama/spack/var/spack/environments/chfs/.spack-env/view/lib",
+    ],
 )
 
 pybind11_cc_library(

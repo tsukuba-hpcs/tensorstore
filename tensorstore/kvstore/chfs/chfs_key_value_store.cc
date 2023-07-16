@@ -179,39 +179,6 @@ absl::Status StatusFromErrno(std::string_view a = {}, std::string_view b = {},
   return StatusFromOsError(GetLastErrorCode(), a, b, c, d);
 }
 
-absl::Status VerifyRegularFile(int fd, FileInfo* info,
-                               const char* path) {
-  int ret;
-  ret = chfs_stat(path, info);
-  if (ret < 0) {
-    return StatusFromErrno("Error getting file information: ", path);
-  }
-  if (!S_ISREG(info->st_mode)) {
-    return absl::FailedPreconditionError(
-        tensorstore::StrCat("Not a regular file: ", path));
-  }
-  return absl::OkStatus();
-}
-
-Result<int> OpenValueFile(const char* path,
-                                           StorageGeneration* generation,
-                                           std::int64_t* size = nullptr) {
-  int fd = chfs_open(path, O_RDWR);
-  if (fd < 0) {
-    auto error = GetLastErrorCode();
-    if (GetOsErrorStatusCode(error) == absl::StatusCode::kNotFound) {
-      *generation = StorageGeneration::NoValue();
-      return fd;
-    }
-    return StatusFromOsError(error, "Error opening file: ", path);
-  }
-  FileInfo info;
-  TENSORSTORE_RETURN_IF_ERROR(VerifyRegularFile(fd, &info, path));
-  if (size) *size = info.st_size;
-  *generation = GetFileGeneration(info);
-  return fd;
-}
-
 std::string_view LongestDirectoryPrefix(const KeyRange& range) {
   std::string_view prefix = tensorstore::LongestPrefix(range);
   const size_t i = prefix.rfind('/');
@@ -311,15 +278,36 @@ struct CHFSReadTask {
   kvstore::ReadOptions options;
 
   Result<ReadResult> operator()() const {
+    // fprintf(stdout, "CHFSReadTask path=%s\n", full_path.c_str());
     ReadResult read_result;
     read_result.stamp.time = absl::Now();
     std::int64_t size;
-    TENSORSTORE_ASSIGN_OR_RETURN(
-        int fd,
-        OpenValueFile(full_path.c_str(), &read_result.stamp.generation, &size));
+    int fd;
+    FileInfo info;
+    int ret;
+    ret = chfs_stat(full_path.c_str(), &info);
+    if (ret < 0) {
+      read_result.state = ReadResult::kMissing;
+      read_result.stamp.generation = StorageGeneration::NoValue();
+      // fprintf(stdout, "ReadResult::kMissing\n");
+      return read_result;
+    }
+    if (!S_ISREG(info.st_mode)) {
+      return absl::FailedPreconditionError(
+        tensorstore::StrCat("Not a regular file: ", full_path));
+    }
+    size = info.st_size;
+    read_result.stamp.generation = GetFileGeneration(info);
+    fd = chfs_open(full_path.c_str(), O_RDWR);
+    if (fd < 0) {
+      auto error = GetLastErrorCode();
+      return StatusFromOsError(error, "Error opening file: ", full_path);
+    }
+
     if (read_result.stamp.generation == options.if_not_equal ||
         (!StorageGeneration::IsUnknown(options.if_equal) &&
          read_result.stamp.generation != options.if_equal)) {
+      // fprintf(stdout, "read_result.stamp.generation == options.if_not_equal\n");
       return read_result;
     }
     TENSORSTORE_ASSIGN_OR_RETURN(auto byte_range,
@@ -358,6 +346,7 @@ struct CHFSWriteTask {
   kvstore::WriteOptions options;
 
   Result<TimestampedStorageGeneration> operator()() const {
+    //fprintf(stdout, "CHFSWriteTask path=%s\n", full_path.c_str());
     TimestampedStorageGeneration r;
     r.time = absl::Now();
     int ret;
@@ -422,6 +411,7 @@ struct CHFSDeleteTask {
   kvstore::WriteOptions options;
 
   Result<TimestampedStorageGeneration> operator()() const {
+    //fprintf(stdout, "CHFSDeleteTask path=%s\n", full_path.c_str());
     TimestampedStorageGeneration r;
     r.time = absl::Now();
     int ret;
@@ -466,6 +456,7 @@ struct CHFSDeleteRangeTask {
   KeyRange range;
 
   void operator()(Promise<void> promise) {
+    // fprintf(stdout, "CHFSDeleteRangeTask\n");
     PathRangeVisitor visitor(range);
     auto is_cancelled = [&promise] { return !promise.result_needed(); };
     auto remove_directory = [&](bool fully_contained, std::string path) {
@@ -507,6 +498,7 @@ struct CHFSListTask {
   AnyFlowReceiver<absl::Status, kvstore::Key> receiver;
 
   void operator()() {
+    //fprintf(stdout, "CHFSListTask\n");
     PathRangeVisitor visitor(range);
     std::atomic<bool> cancelled = false;
     execution::set_starting(receiver, [&cancelled] {
