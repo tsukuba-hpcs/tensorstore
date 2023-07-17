@@ -542,7 +542,12 @@ void CHFSKeyValueStore::ListImpl(ListOptions options,
 Future<kvstore::DriverPtr> CHFSKeyValueStoreSpec::DoOpen() const {
   auto driver_ptr = internal::MakeIntrusivePtr<CHFSKeyValueStore>();
   driver_ptr->spec_ = data_;
-  int ret = chfs_init(NULL);
+  int ret;
+  ret = chfs_initialized();
+  if (ret) {
+    return driver_ptr;
+  }
+  ret = chfs_init(NULL);
   if (ret < 0) {
     fprintf(stderr, "chfs_init failed\n");
   }
